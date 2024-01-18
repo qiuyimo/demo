@@ -17,8 +17,8 @@ var ifName string
 
 func init() {
 	rootCmd.AddCommand(arpCmd)
-	arpCmd.Flags().StringVarP(&ipRange, "range", "r", "172.16.98.150-172.16.98.160", "example: 172.16.98.150-172.16.98.160")
-	arpCmd.Flags().StringVarP(&ifName, "ifname", "n", "ens160", "interface name")
+	arpCmd.Flags().StringVarP(&ipRange, "range", "r", "192.168.7.40-192.168.7.50", "example: 192.168.7.40-192.168.7.50")
+	arpCmd.Flags().StringVarP(&ifName, "ifname", "n", "ens224", "interface name")
 }
 
 // arpCmd represents the arp command

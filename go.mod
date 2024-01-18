@@ -3,6 +3,7 @@ module demo
 go 1.19
 
 require (
+	github.com/coreos/go-iptables v0.7.0
 	github.com/mdlayher/arp v0.0.0-20220512170110-6706a2966875
 	github.com/mdlayher/ethernet v0.0.0-20220221185849-529eae5b6118
 	github.com/spf13/cobra v1.8.0

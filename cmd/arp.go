@@ -4,64 +4,45 @@ import (
 	"bytes"
 	"demo/kit"
 	"fmt"
-	"github.com/mdlayher/arp"
-	"github.com/mdlayher/ethernet"
 	"log"
 	"net"
 
+	"github.com/coreos/go-iptables/iptables"
+	"github.com/gogf/gf/v2/util/gconv"
+	"github.com/mdlayher/arp"
+	"github.com/mdlayher/ethernet"
 	"github.com/spf13/cobra"
 )
 
-var ipRange string
-var ifName string
+var (
+	vsIP   string
+	vsPort uint
+	ifName string
+	ifIP   string
+)
 
 func init() {
 	rootCmd.AddCommand(arpCmd)
-	arpCmd.Flags().StringVarP(&ipRange, "range", "r", "192.168.7.40-192.168.7.50", "example: 192.168.7.40-192.168.7.50")
+	arpCmd.Flags().StringVarP(&vsIP, "ip", "i", "192.168.7.44", "ip string")
+	arpCmd.Flags().UintVarP(&vsPort, "port", "p", 81, "port")
 	arpCmd.Flags().StringVarP(&ifName, "ifname", "n", "ens224", "interface name")
+	arpCmd.Flags().StringVarP(&ifIP, "ifip", "", "192.168.7.30", "interface ip addr")
 }
 
-// arpCmd represents the arp command
 var arpCmd = &cobra.Command{
 	Use:   "arp",
-	Short: "创建一个 arp 服务端，会根据配置的 ip 范围，响应 arp 请求",
-	Long: `通过此服务，指定 ip 范围，这些 ips 要求是没有使用的。
-再给加上 DNAT 规则，即可使用这些 ip 访问了。就像服务器已经设置了这个 ip 一样。
+	Short: "arp server",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Println("vsIP:", vsIP, "vsPort:", vsPort)
+		fmt.Println("ifName:", ifName, "ifIP:", ifIP)
 
-举例：
-有一个服务，网卡是：
-	root@sag-30:~# ip a show ens224
-	4: ens224: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
-		link/ether 00:0c:29:65:e7:44 brd ff:ff:ff:ff:ff:ff
-		altname enp19s0
-		inet 192.168.7.30/24 brd 192.168.7.255 scope global ens224
-		   valid_lft forever preferred_lft forever
-		inet6 fe80::20c:29ff:fe65:e744/64 scope link
-		   valid_lft forever preferred_lft forever
-	root@sag-30:~#
+		if err := iptablesHandle(vsIP, vsPort, ifIP); err != nil {
+			return err
+		}
 
-这个服务器上部署了 nginx，监听了 0.0.0.0:80，会响应 hello world。
-	root@sag-29:~# curl --interface ens224 192.168.7.30
-	hello world
-	root@sag-29:~#
-
-启动此服务，demo arp --range 192.168.7.40-192.168.7.50 --ifname ens224
-这样，此服务就会把 ens224 网卡的 mac 地址，作为 arp 请求的 dst ip 是 192.168.7.40-192.168.7.50 的响应。
-
-再加上一个 iptables DNAT 规则：
-
-iptables -t nat -A PREROUTING -d 192.168.7.44 -p tcp --dport 80 -j DNAT --to-destination 192.168.7.30:80
-
-即可直接使用 192.168.7.44 访问了。
-	root@sag-29:~# curl --interface ens224 192.168.7.44
-	hello world
-	root@sag-29:~#
-
-`,
-	Run: func(cmd *cobra.Command, args []string) {
 		ifs, err := net.Interfaces()
 		if err != nil {
-			log.Fatalf("net.Interfaces() err: %v", err)
+			return fmt.Errorf("net.Interfaces() err: %w", err)
 		}
 		m := make(map[string]*net.Interface)
 		for _, v := range ifs {
@@ -71,23 +52,23 @@ iptables -t nat -A PREROUTING -d 192.168.7.44 -p tcp --dport 80 -j DNAT --to-des
 
 		ifData, ok := m[ifName]
 		if !ok {
-			log.Fatalf("%v is not existed", ifName)
+			return fmt.Errorf("%v is not existed", ifName)
 		}
 
 		fmt.Printf("ifData: %v\n", kit.J(ifData))
 
 		client, err := arp.Dial(ifData)
 		if err != nil {
-			log.Fatalf("arp.Dial(ifData): %v", err)
+			return fmt.Errorf("arp.Dial(ifData): %w", err)
 		}
 
 		for {
 			pkt, eth, err := client.Read()
 			if err != nil {
-				log.Fatalf("client.Read err: %v\n", err)
+				return fmt.Errorf("client.Read err: %w", err)
 			}
 
-			if !kit.IsContainIPWithRange(pkt.TargetIP.String(), ipRange) {
+			if pkt.TargetIP.String() != vsIP {
 				continue
 			}
 
@@ -97,13 +78,37 @@ iptables -t nat -A PREROUTING -d 192.168.7.44 -p tcp --dport 80 -j DNAT --to-des
 			}
 
 			if !bytes.Equal(eth.Destination, ethernet.Broadcast) && !bytes.Equal(eth.Destination, ifData.HardwareAddr) {
-				log.Fatal("mac addr not match")
+				return fmt.Errorf("mac addr not match")
 			}
 
 			if err := client.Reply(pkt, ifData.HardwareAddr, pkt.TargetIP); err != nil {
-				log.Fatalf("client.Reply err: %v\n", err)
+				return fmt.Errorf("client.Reply err: %w", err)
 			}
 			log.Printf("apr ok, sourceIP: %v, targetIP: %v, sourceMAC: %v, targetMAC: %v", pkt.SenderIP, pkt.TargetIP, pkt.SenderHardwareAddr, ifData.HardwareAddr)
 		}
 	},
+}
+
+func iptablesHandle(vsIP string, vsPort uint, ifIP string) error {
+	// iptables -t nat -A PREROUTING -d 192.168.7.44 -p tcp --dport 81 -j DNAT --to-destination 192.168.7.30
+	tables, err := iptables.New()
+	if err != nil {
+		return err
+	}
+	ruleSpec := []string{"-d", vsIP, "-p", "tcp", "--dport", gconv.String(vsPort), "-j", "DNAT", "--to-destination", ifIP}
+
+	ok, err := tables.Exists("nat", "PREROUTING", ruleSpec...)
+	if err != nil {
+		return err
+	}
+	if ok {
+		fmt.Println("nat rule is existed")
+		return nil
+	}
+	err = tables.Append("nat", "PREROUTING", ruleSpec...)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

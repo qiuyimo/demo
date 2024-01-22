@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
-	"github.com/gogf/gf/v2/util/gconv"
 	"github.com/mdlayher/arp"
 	"github.com/mdlayher/ethernet"
 	"github.com/spf13/cobra"
@@ -19,6 +19,7 @@ var (
 	vsPort uint
 	ifName string
 	ifIP   string
+	dnat   bool
 )
 
 func init() {
@@ -27,6 +28,7 @@ func init() {
 	arpCmd.Flags().UintVarP(&vsPort, "port", "p", 81, "port")
 	arpCmd.Flags().StringVarP(&ifName, "ifname", "n", "ens224", "interface name")
 	arpCmd.Flags().StringVarP(&ifIP, "ifip", "", "192.168.7.30", "interface ip addr")
+	arpCmd.Flags().BoolVarP(&dnat, "dnat", "d", true, "is generate DNAT rule")
 }
 
 var arpCmd = &cobra.Command{
@@ -35,9 +37,12 @@ var arpCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("vsIP:", vsIP, "vsPort:", vsPort)
 		fmt.Println("ifName:", ifName, "ifIP:", ifIP)
+		fmt.Println("dnat:", dnat)
 
-		if err := iptablesHandle(vsIP, vsPort, ifIP); err != nil {
-			return err
+		if dnat {
+			if err := iptablesHandle(vsIP, vsPort, ifIP); err != nil {
+				return err
+			}
 		}
 
 		ifs, err := net.Interfaces()
@@ -91,11 +96,13 @@ var arpCmd = &cobra.Command{
 
 func iptablesHandle(vsIP string, vsPort uint, ifIP string) error {
 	// iptables -t nat -A PREROUTING -d 192.168.7.44 -p tcp --dport 81 -j DNAT --to-destination 192.168.7.30
+	// iptables -t nat -A PREROUTING -d 192.168.7.44 -j DNAT --to-destination 192.168.7.30
 	tables, err := iptables.New()
 	if err != nil {
 		return err
 	}
-	ruleSpec := []string{"-d", vsIP, "-p", "tcp", "--dport", gconv.String(vsPort), "-j", "DNAT", "--to-destination", ifIP}
+	// ruleSpec := []string{"-d", vsIP, "-p", "tcp", "--dport", gconv.String(vsPort), "-j", "DNAT", "--to-destination", ifIP}
+	ruleSpec := []string{"-d", vsIP, "-j", "DNAT", "--to-destination", ifIP}
 
 	ok, err := tables.Exists("nat", "PREROUTING", ruleSpec...)
 	if err != nil {
@@ -109,6 +116,7 @@ func iptablesHandle(vsIP string, vsPort uint, ifIP string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("add iptables rule: `iptables -t nat -L PREROUTING %v`\n", strings.Join(ruleSpec, " "))
 
 	return nil
 }
